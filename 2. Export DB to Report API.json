@@ -1,0 +1,156 @@
+{
+  "name": "2. Export DB to Report API",
+  "nodes": [
+    {
+      "parameters": {},
+      "id": "679fc518-d630-45c8-9330-0a28fc697bf3",
+      "name": "Start Export",
+      "type": "n8n-nodes-base.manualTrigger",
+      "typeVersion": 1,
+      "position": [
+        0,
+        256
+      ]
+    },
+    {
+      "parameters": {
+        "values": {
+          "string": [
+            {
+              "name": "studentId",
+              "value": "8"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "c92b9b0f-1e4e-4970-800d-5a45c63a7ff8",
+      "name": "Config",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 2,
+      "position": [
+        208,
+        256
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT \n  spare_code as \"spareCode\",\n  spare_name as \"spareName\",\n  spare_description as \"spareDescription\",\n  spare_type as \"spareType\",\n  spare_status as \"spareStatus\",\n  price_raw as \"price\",\n  quantity,\n  updated_at_raw as \"updatedAt\"\nFROM lab_spares_archive\nWHERE is_active = TRUE\nORDER BY spare_code ASC;",
+        "options": {}
+      },
+      "id": "f0c005c4-727c-4f29-aef1-3922cf8bfb01",
+      "name": "Get Active Spares",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.3,
+      "position": [
+        400,
+        256
+      ],
+      "credentials": {
+        "postgres": {
+          "id": "0PLc0sSMMzBa7Ql3",
+          "name": "Postgres account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// список деталей, который пришел из базы\nconst items = $input.all().map(item => item.json);\n\n// порядок колонок\nconst columns = [\n  \"spareCode\", \n  \"spareName\", \n  \"spareDescription\", \n  \"spareType\", \n  \"spareStatus\", \n  \"price\", \n  \"quantity\", \n  \"updatedAt\"\n];\n\n// делаем строки для файла\nconst csvLines = items.map(row => {\n  // проходимся по колонкам и достаем значения\n  const values = columns.map(col => {\n    // превращаем значение в строку\n    return String(row[col] || '');\n  });\n\n  // значения идут через \";\"\n  return values.join(';');\n});\n\n// объединяем все строки в текст с переносами\nconst fileContent = csvLines.join('\\n');\n\n// возвращаем результат в формате, который требует n8n для отправки файлов\nreturn [{\n  json: {},\n  binary: {\n    data: {\n      data: Buffer.from(fileContent).toString('base64'),\n      mimeType: 'text/csv'\n    }\n  }\n}];"
+      },
+      "id": "7b669784-4375-4937-bfb7-6989a246b75b",
+      "name": "Manual CSV Create",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        624,
+        256
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "=http://212.237.219.35:8080/students/{{$node[\"Config\"].json[\"studentId\"]}}/report/csv",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "text/csv"
+            }
+          ]
+        },
+        "sendBody": true,
+        "contentType": "binaryData",
+        "inputDataFieldName": "data",
+        "options": {}
+      },
+      "id": "d63549dd-d3cc-409f-8ffb-1b0b39aeba98",
+      "name": "Send Report",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.3,
+      "position": [
+        848,
+        256
+      ]
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "Start Export": {
+      "main": [
+        [
+          {
+            "node": "Config",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Config": {
+      "main": [
+        [
+          {
+            "node": "Get Active Spares",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get Active Spares": {
+      "main": [
+        [
+          {
+            "node": "Manual CSV Create",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Manual CSV Create": {
+      "main": [
+        [
+          {
+            "node": "Send Report",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "versionId": "1671b122-8190-4194-a10c-5c24dc7653a6",
+  "meta": {
+    "templateCredsSetupCompleted": true,
+    "instanceId": "dfa46e36d371334157e98b5ef4edda388597d3f5652538869d4233faea13783a"
+  },
+  "id": "iySZzagnrKYyL11c",
+  "tags": []
+}

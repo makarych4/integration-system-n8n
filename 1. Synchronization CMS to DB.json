@@ -1,0 +1,178 @@
+{
+  "name": "1. Synchronization CMS to DB",
+  "nodes": [
+    {
+      "parameters": {},
+      "type": "n8n-nodes-base.manualTrigger",
+      "typeVersion": 1,
+      "position": [
+        192,
+        144
+      ],
+      "id": "70b4253a-4a07-4684-a851-27f8227675d0",
+      "name": "When clicking ‘Execute workflow’"
+    },
+    {
+      "parameters": {
+        "values": {
+          "string": [
+            {
+              "name": "studentId",
+              "value": "8"
+            },
+            {
+              "name": "baseUrl",
+              "value": "http://212.237.219.35:8080"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "0636d0df-2c0b-4e99-86a0-907bc90b994f",
+      "name": "Config",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 2,
+      "position": [
+        352,
+        144
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const { baseUrl, studentId } = $input.item.json;\n\nconst allItems = [];\nlet page = 0;\nlet isDownloading = true;\n\n// пока сервер продолжает отдавать данные\nwhile (isDownloading) {\n  const response = await this.helpers.httpRequest({\n    method: 'GET',\n    url: `${baseUrl}/students/${studentId}/cms/spares`,\n    qs: {\n      page: page,\n      size: 10\n    },\n    json: true\n  });\n\n  // если пришел список и он не пустой, то сохраняем\n  if (Array.isArray(response) && response.length > 0) {\n    allItems.push(...response);\n    page++;\n  } else {\n    // если список пустой - значит данных не осталось\n    isDownloading = false;\n  }\n}\n\n// проходимся по всем собранным данным и готовим их для SQL\nreturn allItems.map(item => {\n  const cleanPrice = parseFloat(String(item.price).replace(',', '.'));\n  \n  const cleanDate = String(item.updatedAt).replace('T', ' ');\n\n  return {\n    json: {\n      ...item,\n      safePrice: cleanPrice,\n      safeDate: cleanDate\n    }\n  };\n});"
+      },
+      "id": "af2aeb1f-5990-45af-80d2-1df716d285da",
+      "name": "Download CMS Data",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        544,
+        144
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "DO $$\nDECLARE\n  current_code text := '{{$json.spareCode}}';\n  is_exists boolean;  -- Существует ли деталь?\n  is_changed boolean; -- Изменилась ли деталь?\nBEGIN\n  -- ищем, есть ли уже такая активная деталь на складе\n  SELECT EXISTS(\n    SELECT 1 FROM lab_spares_archive \n    WHERE spare_code = current_code AND is_active = TRUE\n  ) INTO is_exists;\n\n  -- если есть, то проверяем изменились ли данные\n  IF is_exists THEN\n    SELECT EXISTS(\n      SELECT 1 FROM lab_spares_archive\n      WHERE spare_code = current_code \n        AND is_active = TRUE\n        AND (\n          -- отличается ли где-нибудь\n          spare_name != '{{$json.spareName}}' OR\n          spare_description != '{{$json.spareDescription}}' OR\n          spare_type != '{{$json.spareType}}' OR \n          spare_status != '{{$json.spareStatus}}' OR\n          quantity != {{$json.quantity}} OR\n          price_raw != '{{$json.price}}'\n        )\n    ) INTO is_changed;\n\n    -- если данные отличаются, то отправляем старую запись в архив\n    IF is_changed THEN\n      UPDATE lab_spares_archive\n      SET is_active = FALSE, valid_to = NOW()\n      WHERE spare_code = current_code AND is_active = TRUE;\n    END IF;\n  END IF;\n\n  -- если это новинка или старая запись обновилась, то вставляем свежую строку\n  IF is_changed OR NOT is_exists THEN\n    INSERT INTO lab_spares_archive (\n      spare_code, spare_name, spare_description, spare_type, spare_status, \n      price_val, price_raw, quantity, updated_at_ts, updated_at_raw\n    )\n    VALUES (\n      current_code,\n      '{{$json.spareName}}',\n      '{{$json.spareDescription}}',\n      '{{$json.spareType}}',\n      '{{$json.spareStatus}}',\n      {{$json.safePrice}},\n      '{{$json.price}}',\n      {{$json.quantity}},\n      '{{$json.safeDate}}'::timestamp,\n      '{{$json.updatedAt}}'\n    );\n  END IF;\nEND $$;",
+        "options": {}
+      },
+      "id": "90a004d1-0966-4a99-b26f-1fe66bd8290e",
+      "name": "Update DB History",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.3,
+      "position": [
+        768,
+        144
+      ],
+      "credentials": {
+        "postgres": {
+          "id": "0PLc0sSMMzBa7Ql3",
+          "name": "Postgres account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// обращаемся узлу, где скачивали данные\nconst sourceData = $items(\"Download CMS Data\");\n\n// проходимся по каждой детали и готовим её код для SQL-запроса\nconst formattedCodes = sourceData.map(item => {\n  return `'${item.json.spareCode}'`;\n});\n\n// делаем все коды в одну строку через запятую\nconst sqlList = formattedCodes.join(',');\n\n// отдаем эту строку дальше\nreturn { \n  json: { \n    codes: sqlList \n  } \n};"
+      },
+      "id": "1e08eb3f-46a9-41a7-a118-f5264ff0cee1",
+      "name": "Collect Active Codes",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        992,
+        144
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "/*\n  Находим все детали, которые исчезли из CMS\n  Если деталь была активна в базе, но не пришла в новом списке от API, то считаем её удаленной и отправляем в архив\n*/\n\nUPDATE lab_spares_archive\nSET \n  is_active = FALSE,  -- деталь больше не на складе\n  valid_to = NOW()    -- время, когда она исчезла\nWHERE \n  is_active = TRUE    -- ищем только среди действующих записей\n  AND spare_code NOT IN ({{$json.codes}});  -- детали не должны быть в списке, который мы скачали",
+        "options": {}
+      },
+      "id": "0c0308c7-ff57-41a6-b118-62632d79901b",
+      "name": "Archive Missing Items",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.3,
+      "position": [
+        1184,
+        144
+      ],
+      "credentials": {
+        "postgres": {
+          "id": "0PLc0sSMMzBa7Ql3",
+          "name": "Postgres account"
+        }
+      }
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "When clicking ‘Execute workflow’": {
+      "main": [
+        [
+          {
+            "node": "Config",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Config": {
+      "main": [
+        [
+          {
+            "node": "Download CMS Data",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Download CMS Data": {
+      "main": [
+        [
+          {
+            "node": "Update DB History",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Update DB History": {
+      "main": [
+        [
+          {
+            "node": "Collect Active Codes",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Collect Active Codes": {
+      "main": [
+        [
+          {
+            "node": "Archive Missing Items",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "versionId": "fa5b57dd-bf09-45d9-bdff-4cb6c6119835",
+  "meta": {
+    "templateCredsSetupCompleted": true,
+    "instanceId": "dfa46e36d371334157e98b5ef4edda388597d3f5652538869d4233faea13783a"
+  },
+  "id": "mR9wNdlbwAGWpjgf",
+  "tags": []
+}
