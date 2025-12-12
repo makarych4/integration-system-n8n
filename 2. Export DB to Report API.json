@@ -36,7 +36,7 @@
     {
       "parameters": {
         "operation": "executeQuery",
-        "query": "SELECT \n  spare_code as \"spareCode\",\n  spare_name as \"spareName\",\n  spare_description as \"spareDescription\",\n  spare_type as \"spareType\",\n  spare_status as \"spareStatus\",\n  price_raw as \"price\",\n  quantity,\n  updated_at_raw as \"updatedAt\"\nFROM lab_spares_archive\nWHERE is_active = TRUE\nORDER BY spare_code ASC;",
+        "query": "SELECT DISTINCT ON (spare_code) \n  spare_code as \"spareCode\",\n  spare_name as \"spareName\",\n  spare_description as \"spareDescription\",\n  spare_type as \"spareType\",\n  spare_status as \"spareStatus\",\n  price_raw as \"price\",\n  quantity,\n  updated_at_raw as \"updatedAt\"\nFROM lab_spares_archive\nORDER BY spare_code ASC, valid_from DESC;",
         "options": {}
       },
       "id": "f0c005c4-727c-4f29-aef1-3922cf8bfb01",
